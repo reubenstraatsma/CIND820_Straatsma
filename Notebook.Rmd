@@ -1,0 +1,546 @@
+---
+title: "Data Preparation Script"
+output: html_notebook
+---
+
+```{r}
+### Packages
+library(weathercan) # Scrape weather data.
+library(dplyr) # Data transformation.
+library(sf) # Read in geographic data and manipulate attribute table as a data frame (allows spatial data to be transformed while preserving geometry)
+library(lubridate) # Work with dates.
+library(scales)
+library(gridExtra)
+library(ggthemes)
+library(ggplot2)
+library(psych)
+library(knitr)
+library(scales)
+library(rAverage)
+library(forecast)
+library(zoo)
+library(corrplot)
+library(fpp)
+```
+
+Boundary Data
+
+```{r}
+## Toronto Boundary
+# Open data: https://open.toronto.ca/dataset/regional-municipal-boundary/
+
+to_bound <- 
+  st_read("C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Data\\Boundaries\\citygcs_regional_mun_wgs84.shp")
+
+to_bound <- 
+  st_transform(to_bound
+               ,26917) # Transform CRS to one more suitable for spatial analysis.
+
+## Dissemination Areas
+# Open data: https://www12.statcan.gc.ca/census-recensement/2011/geo/bound-limit/bound-limit-2016-eng.cfm
+
+# 
+da <- 
+  st_read("C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Data\\Boundaries\\lda_000b16a_e_clipped.shp"
+  )
+
+da <- 
+  st_transform(da
+               ,26917
+  ) # Transform CRS to one more suitable for spatial analysis.
+
+# Remove all polygons outside of the Toronto municipal boundary.
+da_clipped <- 
+  st_intersection(da
+                  , to_bound
+  )
+
+# Write projected polygon file. 
+st_write(da, "C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Data\\Boundaries\\projected_DA.shp")
+```
+
+Weather Station Data
+
+```{r}
+# Read in hourly and daily views for three Toronto weather stations.
+
+#toronto_hr = 
+#  weather_dl(c(48549
+#               ,31688)
+#             , "2014-01-01"
+#             , "2019-12-31"
+#             , "hour"
+#  )
+
+toronto_day = 
+  weather_dl(c(48549
+               ,31688)
+             , "2014-01-01"
+             , "2019-12-31
+             ", "day")
+
+# Keep only relevant variables.
+
+toronto_day_trim <- 
+  toronto_day %>% 
+  select(station_name
+         , station_id
+         , date
+         , total_precip
+         , mean_temp
+         , lat
+         , lon
+         , date
+         , cool_deg_days
+         , heat_deg_days
+         , max_temp
+         , min_temp
+         , day
+         , month
+         , year) %>%
+  filter(date < date("2020-01-01"))
+
+#toronto_hr_trim <- 
+#  toronto_hr %>% 
+#  select(station_name
+#         , station_id
+#         , date
+#         , time
+#         , year
+#         , month
+#         , day
+#         , hour 
+#         , temp
+#         , weather
+#         , rel_hum
+#  )
+
+glimpse(toronto_day_trim)
+
+# Check for NA
+sapply(toronto_day_trim,      
+       function(x)  
+         sum(is.na(x)))
+
+# Clear cyclical pattern is revealed each year within temperature fluctuations.
+ggplot(toronto_day_trim, aes(x = month, y = mean_temp)) + geom_point() + facet_wrap(to_temp$year)
+
+# max_temp, 184 NA
+# total_precip, 262 NA
+# mean_temp, 195 NA
+# cool_deg_days, 195 NA
+# heat_deg_days, 195 
+
+# Due to the cyclical nature of temperature, we will subset toronto_day_trim by month, and then impute with median.
+
+# Create ID variable for month/year.
+toronto_day_trim <- 
+  toronto_day_trim %>%
+  mutate(mo_yr_id = paste0(year,"-",month))
+
+# Create a list of dataframes, split by year/month ID.
+toronto_day_split <- split(toronto_day_trim, toronto_day_trim$mo_yr_id)
+
+# Create function to impute median.
+weather_impute <- function(df){
+  # Replace NA with median in a df.
+  df$total_precip[is.na(df$total_precip)] <- 
+    median(na.omit(df$total_precip))
+  df$max_temp[is.na(df$max_temp)] <- 
+    median(na.omit(df$max_temp))
+  df$mean_temp[is.na(df$mean_temp)] <- 
+    median(na.omit(df$mean_temp))
+  df$cool_deg_days[is.na(df$cool_deg_days)] <- 
+    median(na.omit(df$cool_deg_days))
+  df$heat_deg_days[is.na(df$heat_deg_days)] <- 
+    median(na.omit(df$heat_deg_days))
+  df$min_temp[is.na(df$min_temp)] <- 
+    median(na.omit(df$min_temp))
+  
+  return(df)
+}
+
+# Apply function on every df in list.
+toronto_day_trim2 = lapply(toronto_day_split, weather_impute)
+
+# bind all rows together back into single df.
+toronto_day_trim2 = bind_rows(toronto_day_trim2, .id = "column_label")
+
+# Check for NA
+sapply(toronto_day_trim2,      
+       function(x)  
+         sum(is.na(x)))
+
+# Impute with median (numeric continuous)
+#toronto_day_trim$total_precip[is.na(toronto_day_trim$total_precip)] <- median(na.omit(toronto_day_trim$total_precip))
+#toronto_day_trim$mean_temp[is.na(toronto_day_trim$mean_temp)] <- median(na.omit(toronto_day_trim$mean_temp))
+
+#toronto_hr_trim$temp[is.na(toronto_hr_trim$temp)] <- 
+#  median(na.omit(toronto_hr_trim$temp)
+#  )
+
+#toronto_hr_trim$rel_hum[is.na(toronto_hr_trim$rel_hum)] <- 
+#  median(na.omit(toronto_hr_trim$rel_hum)
+#  )
+
+# Change NA with 'None', indicating no unusual weather event.
+#toronto_hr_trim$weather[is.na(toronto_hr_trim$weather)] <- "NONE"
+
+# Reduce weather categories.
+#unique(toronto_hr_trim$weather)
+
+#snow = which(toronto_hr_trim$weather == "Snow" 
+#             | toronto_hr_trim$weather == "Freezing Rain,Snow"
+#             | toronto_hr_trim$weather == "Snow,Blowing Snow"
+#             | toronto_hr_trim$weather == "Moderate Snow"
+#             | toronto_hr_trim$weather == "Haze,Blowing Snow"
+#             | toronto_hr_trim$weather == "Heavy Snow"
+#)
+
+#cloud = which(toronto_hr_trim$weather == "Fog" 
+#              | toronto_hr_trim$weather == "Haze"
+#)
+
+#rain = which(toronto_hr_trim$weather == "Rain" 
+#             | toronto_hr_trim$weather == "Haze"
+#             | toronto_hr_trim$weather == "Freezing Rain,Fog"
+#             | toronto_hr_trim$weather == "Rain,Fog"
+#             | toronto_hr_trim$weather == "Thunderstorms,Rain,Fog"
+#             | toronto_hr_trim$weather == "Thunderstorms,Rain"
+#             | toronto_hr_trim$weather == "Thunderstorms,Heavy Rain,Fog"
+#             | toronto_hr_trim$weather == "Moderate Rain,Fog"
+#             | toronto_hr_trim$weather == "Heavy Rain"
+#             | toronto_hr_trim$weather == "Thunderstorms"
+#             | toronto_hr_trim$weather == "Heavy Rain,Fog"
+#             | toronto_hr_trim$weather == "Moderate Rain"
+#             | toronto_hr_trim$weather == "Rain,Snow"
+#             | toronto_hr_trim$weather == "Freezing Rain"
+#             | toronto_hr_trim$weather == "Thunderstorms,Fog"
+#             | toronto_hr_trim$weather == "Thunderstorms,Moderate Rain"
+#             | toronto_hr_trim$weather == "Thunderstorms,Haze"
+#             | toronto_hr_trim$weather == "Thunderstorms,Heavy Rain"
+#             | toronto_hr_trim$weather == "Thunderstorms,Moderate Rain,Fog"
+#)
+
+#toronto_hr_trim$weather[snow] <- "SNOW"
+#toronto_hr_trim$weather[cloud] <- "CLOUDY"
+#toronto_hr_trim$weather[rain] <- "RAIN"
+
+#unique(toronto_hr_trim$weather)
+
+#toronto_hr_trim$hour <- hour(toronto_hr_trim$time)
+
+# Cast station ID as factor.
+toronto_day_trim2$station_id <- as.factor(toronto_day_trim2$station_id)
+```
+
+
+MCI Crime Data: Pre-processing.
+Purpose: Glimpse, subset, and clean the MCI dataset. 
+
+```{r}
+mci = 
+  st_read("C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Data\\Major Crime\\MCI_2014_to_2019.shp"
+  )
+
+glimpse(mci)
+
+mci <- 
+  st_transform(mci
+               ,26917
+  ) # Transform CRS to one more suitable for spatial analysis.
+
+# Rename variables and filter out non-violent crime.
+mci_trim <- 
+  mci %>% 
+  select(occurrence
+         , occurren_1
+         , occurren_2
+         , occurren_3
+         , occurren_6
+         , MCI
+         , Long
+         , Lat) %>% 
+  mutate(occur_year = occurren_1
+         , occur_mo = occurren_2
+         , occur_da = occurren_3
+         , occur_hour = occurren_6) %>% 
+  select(-occurren_1
+         , -occurren_2
+         , -occurren_3
+         , -occurren_6) %>% 
+  filter(MCI != "Auto Theft"
+         , MCI != "Break and Enter"
+         , MCI != "Theft Over")
+
+# Write transformed output.
+st_write(mci_trim, "C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Granual Datasets\\mci_v1.gpkg")
+
+### Geo-processing (done in QGIS).
+
+# 1. Geo-code weather station (map lat/long to x/y point in project CRS)
+# 2. Read in mci_v1.gpkg (created in r in step 45)
+# 3. Use nearest neighbour analysis to determine weather station closest to each crime incide point.
+# 4. Use spatial join to join each dissemination area ID to each crime incident (this is done in case data will be subset or aggregated by DA at a later date.)
+
+# QGIS Logs
+
+# Nearest neighbour, incident to weather station.
+#processing.run("qgis:distancetonearesthubpoints", {'INPUT':'C:/Users/LPGIG00007/Documents/Homework/Continuing Education/Semester 3 - Fall 2020/Granual Datasets/mci_v1.gpkg|layername=mci_v1','HUBS':'file:///C:/Users/LPGIG00007/Documents/Homework/Continuing%20Education/Semester%203%20-%20Fall%202020/Data/Weather_stations.csv?type=csv&detectTypes=yes&xField=Longitude&yField=Latitude&crs=EPSG:4326&spatialIndex=no&subsetIndex=no&watchFile=no','FIELD':'ID','UNIT':0,'OUTPUT':'memory:'})
+
+# Spatial join DA ID to the incident point falling within or touching.
+#Input parameters: { 'DISCARD_NONMATCHING' : False, 'INPUT' : 'Point?crs=EPSG:26917&field=fid:long&field=occurrence:date&field=MCI:string&field=Long:double&field=Lat:double&field=occur_year:integer&field=occur_mo:string&field=occur_da:integer&field=occur_hour:integer&field=HubName:string&field=HubDist:double&uid={1b6e826f-c20c-4a7b-a0e2-331e3c9fe55d}', 'JOIN' : 'C:/Users/LPGIG00007/Documents/Homework/Continuing Education/Semester 3 - Fall 2020/Data/Boundaries/clipped_dissemination_area.shp', 'JOIN_FIELDS' : [], 'METHOD' : 1, 'OUTPUT' : 'memory:', 'PREDICATE' : [0], 'PREFIX' : 'x' }
+
+mci_v2 = st_read("C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\Granual Datasets\\mci_v2.gpkg")
+
+# It was realized that weather station 53678 did have data listed for all required years. Therefore, these rows were replaced with 31688, the next closest station.
+mci_v2$weather_station[which(mci_v2$weather_station == 53678)] = 31688
+
+# Remove unneccsary variables from spatial join.
+mci_trim2 <- 
+  mci_v2 %>% 
+  select(-"xPRUID"
+         ,-"xPRNAME"
+         ,-"xCDUID"
+         ,-"xCDNAME"
+         ,-"xCDTYPE"
+         ,-"xCCSUID"
+         ,-"xCCSNAME"
+         ,-"xCSDUID"
+         ,-"xCSDNAME"
+         ,-"xCSDTYPE"
+         ,-"xERUID"
+         ,-"xERNAME"
+         ,-"xSACCODE"
+         ,-"xSACTYPE"
+         ,-"xCMAUID"
+         ,-"xCMAPUID"
+         ,-"xCMANAME"
+         ,-"xCMATYPE"
+         ,-"xCTUID"
+         ,-"xCTNAME"
+         ,-"xADAUID" ) %>% 
+  mutate(da_id = xDAUID) %>% 
+  select(-xDAUID) 
+
+### Joins
+
+## Join weather data with mci data, to create the most granular view (each row for one incident)
+# Left join as there may be some days & hours where 0 incidents of crime were observed. Join is based on station ID (QGIS spatial join added the nearest weather station id to the mci sf). 
+
+mci_joined <- 
+  inner_join(mci_trim2
+            , toronto_day_trim2
+            , by = c("weather_station" = "station_id"
+                     , "occurrence" = "date"))
+
+# Check if anything didn't join.
+mci_unjoin <- 
+  anti_join(mci_trim2
+            , toronto_day_trim2
+            , by = c("weather_station" = "station_id"
+                     , "occurrence" = "date"))
+# 857 out of 132996 records didn't join. This is because these crime incidents occured before they were reported. While all were reported in 2014 (and thus included in the 2014 - 2019 dataset), they occured earlier and do not have a corresponding temperature.
+
+mci_granular <- 
+  mci_joined %>% 
+  select(-year
+         , -month
+         , -day
+         , mo_yr_id)
+
+glimpse(mci_granular)
+
+## Aggregate mci_granular to have total incident count for each hour of each day.
+# We will also make the following buckets.
+# Night = hours 0:00 - 5:00
+# Morning = hours 6:00 - 11:00
+# Afternoon = hours 12:00 - 17:00
+# Evening = hours 6:00 - 23:00
+
+mci_per_day <-
+  mci_granular %>%
+  group_by(occurrence) %>%
+  summarise(incidents = n()
+            , assault_count = sum(MCI == "Assault") # count of assault incidents
+            , robbery_count = sum(MCI == "Robbery") # count of robbery incidents
+            , precip = mean(total_precip) # # average total precipitation recorded at each incidents nearest weather stn.
+            , mean_temp = mean(mean_temp) # average mean_temp recorded at each incidents nearest weather stn.
+            , cool_deg_days = mean(cool_deg_days) # average cool degrees recorded at each incidents nearest weather stn.
+            , heat_deg_days = sum(heat_deg_days)  # average heat degrees recorded at each incidents nearest weather stn.
+            , max_temp = mean(max_temp) # average max temperature recorded at each incidents nearest weather stn.
+            , min_temp = mean(min_temp) # average minimum temperature recorded at each incidents nearest weather stn.
+            , morn_inc = sum(occur_hour >= 0 & occur_hour < 6) # count of morning incidents
+            , aft_inc = sum(occur_hour >= 6 & occur_hour < 12) # count of afternoon incidents
+            , eve_inc = sum(occur_hour >= 12 & occur_hour < 18) # count of evening incidents
+            , nuit_inc = sum(occur_hour >= 18 & occur_hour < 24)) # count of night incidents
+
+# Only the most granular dataset needs to preserve geographic attributes. As this variable is aggregated, each row is a multi-point feature. Therefore, geometry is stripped by coercing the dataset to a dataframe.
+
+mci_per_day <- as.data.frame(mci_per_day)
+mci_per_day <- select(mci_per_day, -geom)
+
+write.csv(mci_per_day, "C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\mci_per_hr.csv")
+st_write(mci_granular, "C:\\Users\\LPGIG00007\\Documents\\Homework\\Continuing Education\\Semester 3 - Fall 2020\\mci_granular.gpkg")
+```
+
+Outlier Treatment
+
+```{r}
+# Understand variable type.
+glimpse(mci_per_day)
+
+sapply(mci_per_day,      
+       function(x)  
+         sum(is.na(x)))
+       
+# Calculate summary statistics.
+mci_summary <- describe(mci_per_day)
+
+# Generate table of summary statistics.
+kable(mci_summary,digits = 2)
+
+# Next we impute outliers. As morn_inc, aft_inc, eve_inc, and nuit_inc is the incident count broken down by hour of occurrence. We will normalize these variables and then resum the incident count to adjust.
+# Create list of outliers in assault variable.
+
+mci_day_clean <- mci_per_day
+
+morn = 
+  which(mci_day_clean$morn_inc %in% boxplot(mci_day_clean$morn_inc)$out)
+
+# Impute outliers with median.
+mci_day_clean$morn_inc[morn] <- 
+  median(mci_day_clean$morn_inc)
+
+aft = 
+  which(mci_day_clean$aft_inc %in% boxplot(mci_day_clean$aft_inc)$out)
+
+# Impute outliers with median.
+mci_day_clean$aft_inc[aft] <- 
+  median(mci_day_clean$aft_inc)
+
+eve = 
+  which(mci_day_clean$eve_inc %in% boxplot(mci_day_clean$eve_inc)$out)
+
+# Impute outliers with median.
+mci_day_clean$eve_inc[eve] <- 
+  median(mci_day_clean$eve_inc)
+
+nuit = 
+  which(mci_day_clean$nuit_inc %in% boxplot(mci_day_clean$nuit_inc)$out)
+
+# Impute outliers with median.
+mci_day_clean$nuit_inc[nuit] <- 
+  median(mci_day_clean$nuit_inc)
+
+mci_day_clean <-
+  mci_day_clean %>%
+  mutate(incients = morn_inc + aft_inc + eve_inc + nuit_inc)
+
+```
+
+Exploratory Analysis
+
+```{r}
+boxplot(mci_day_clean$mean_temp)
+
+boxplot(mci_day_clean$max_temp)
+
+boxplot(mci_day_clean$min_temp)
+
+boxplot(mci_day_clean$precip)
+
+boxplot(mci_day_clean$cool_deg_days)
+
+boxplot(mci_day_clean$hot_deg_days)
+
+# Now that data is clean, we perform time series analysis on month and 
+mci_per_month <- 
+  mci_day_clean %>%
+  group_by(yearmon = as.yearmon(occurrence)) %>%
+  summarize(max_temp = mean(max_temp)
+            , incidents = sum(incidents)
+            , assaults = sum(assault_count)
+            , robbery = sum(robbery_count)
+            , prepcip = mean(precip)
+            , mean_temp = mean(mean_temp)
+            , cool_deg_days = mean(cool_deg_days)
+            , heat_deg_days = mean(heat_deg_days)
+            , min_temp = mean(min_temp)
+            , morn_inc = sum(morn_inc)
+            , aft_inc = sum(aft_inc)
+            , eve_inc = sum(eve_inc)
+            , nuit_inc = sum(incidents))
+
+# Correlations
+
+corrplot(cor(mci_day_clean[2:14]), method="number", is.corr = F)
+corrplot(cor(mci_per_month[2:14]), method="number", is.corr = F)
+
+# Plots
+ggplot(mci_per_month, aes(x = yearmon, y = incidents)) + geom_line() + geom_smooth()
+
+ggplot(mci_per_month, aes(x = yearmon, y = max_temp)) + geom_line() + geom_smooth()
+
+ggplot(mci_per_month, aes(x = max_temp, incidents)) + geom_point() + geom_smooth()
+
+ggplot(mci_day_clean, aes(x = incidents, max_temp)) + geom_line() + geom_smooth()
+
+mci_per_day_split <- 
+  split(mci_per_day
+        , month(mci_per_day$occurrence))
+
+monthly_cor <- function(df){
+  cor(df$incidents,df)
+}
+
+lapply(mci_per_day_split, monthly_cor)
+
+```
+
+Time Series Analysis
+
+```{r}
+incident_ts <- 
+  mci_day_clean$incidents
+
+temp_ts <- 
+  mci_day_clean$max_temp
+
+# Create time series out of incidents.
+incident_ts <- 
+  ts(incident_ts
+     , start = c(2014, 1, 1)
+     , frequency = 365.25)
+
+temp_ts <- 
+  ts(temp_ts
+     , start = c(2014, 1, 1)
+     , frequency = 365.25)
+  
+autoplot(incident_ts)
+
+ggseasonplot(incident_ts)
+
+acf(incident_ts)
+
+gglagplot(incident_ts, 9)
+
+autoplot(temp_ts)
+
+ggseasonplot(temp_ts)
+
+acf(temp_ts)
+
+gglagplot(temp_ts, 9)
+
+# INCOMPLETE - NEXT STRIP SEASONALITY
+```
+
+
+Regression Model
+
+```{r}
+#INCOMPLETE
+```
+
